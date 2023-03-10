@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"math"
 	"math/rand"
 	"net"
@@ -39,7 +40,15 @@ var hookDo = func(fn func(req *http.Request) (*http.Response, error)) func(req *
 	}
 
 	return func(req *http.Request) (resp *http.Response, err error) {
-		_req := req.Clone(context.TODO())
+		_req := req.Clone(req.Context())
+		buf := bytes.NewBuffer(nil)
+		if req.Body != nil {
+			_, _ = buf.ReadFrom(req.Body)
+			req.Body.Close()
+
+			req.Body = ioutil.NopCloser(bytes.NewBuffer(buf.Bytes()))
+			_req.Body = ioutil.NopCloser(bytes.NewBuffer(buf.Bytes()))
+		}
 
 		defer func(st time.Time) {
 			PrintLog(_req, resp, err, time.Since(st))
