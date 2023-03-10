@@ -31,8 +31,20 @@ import (
 
 var debugLog = debug.Init("tea")
 
+var PrintLog func(req *http.Request, resp *http.Response, err error, duration time.Duration)
+
 var hookDo = func(fn func(req *http.Request) (*http.Response, error)) func(req *http.Request) (*http.Response, error) {
-	return fn
+	if PrintLog == nil {
+		return fn
+	}
+
+	return func(req *http.Request) (resp *http.Response, err error) {
+		defer func(st time.Time) {
+			PrintLog(req, resp, err, time.Since(st))
+		}(time.Now())
+
+		return fn(req)
+	}
 }
 
 var basicTypes = []string{
