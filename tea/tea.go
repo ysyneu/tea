@@ -39,8 +39,10 @@ var hookDo = func(fn func(req *http.Request) (*http.Response, error)) func(req *
 	}
 
 	return func(req *http.Request) (resp *http.Response, err error) {
+		_req := req.Clone(context.TODO())
+
 		defer func(st time.Time) {
-			PrintLog(req, resp, err, time.Since(st))
+			PrintLog(_req, resp, err, time.Since(st))
 		}(time.Now())
 
 		return fn(req)
