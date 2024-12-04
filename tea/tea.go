@@ -241,8 +241,11 @@ func NewSDKError(obj map[string]interface{}) *SDKError {
 				}
 			}
 		}
-		byt, _ := json.Marshal(data)
-		err.Data = String(string(byt))
+		byt := bytes.NewBuffer([]byte{})
+		jsonEncoder := json.NewEncoder(byt)
+		jsonEncoder.SetEscapeHTML(false)
+		jsonEncoder.Encode(data)
+		err.Data = String(string(bytes.TrimSpace(byt.Bytes())))
 	}
 
 	if statusCode, ok := obj["statusCode"].(int); ok {
@@ -285,7 +288,7 @@ func Convert(in interface{}, out interface{}) error {
 	return err
 }
 
-// Convert is use convert map[string]interface object to struct
+// Recover is used to format error
 func Recover(in interface{}) error {
 	if in == nil {
 		return nil
@@ -345,6 +348,9 @@ func DoRequest(request *Request, requestRuntime map[string]interface{}) (respons
 
 	requestURL := ""
 	request.Domain = request.Headers["host"]
+	if request.Port != nil {
+		request.Domain = String(fmt.Sprintf("%s:%d", StringValue(request.Domain), IntValue(request.Port)))
+	}
 	requestURL = fmt.Sprintf("%s://%s%s", StringValue(request.Protocol), StringValue(request.Domain), StringValue(request.Pathname))
 	queryParams := request.Query
 	// sort QueryParams by key
@@ -435,28 +441,30 @@ func getHttpTransport(req *Request, runtime *RuntimeObject) (*http.Transport, er
 	if err != nil {
 		return nil, err
 	}
-	if strings.ToLower(*req.Protocol) == "https" &&
-		runtime.Key != nil && runtime.Cert != nil {
-		cert, err := tls.X509KeyPair([]byte(StringValue(runtime.Cert)), []byte(StringValue(runtime.Key)))
-		if err != nil {
-			return nil, err
-		}
-
-		trans.TLSClientConfig = &tls.Config{
-			Certificates:       []tls.Certificate{cert},
-			InsecureSkipVerify: BoolValue(runtime.IgnoreSSL),
-		}
-		if runtime.CA != nil {
-			clientCertPool := x509.NewCertPool()
-			ok := clientCertPool.AppendCertsFromPEM([]byte(StringValue(runtime.CA)))
-			if !ok {
-				return nil, errors.New("Failed to parse root certificate")
+	if strings.ToLower(*req.Protocol) == "https" {
+		if BoolValue(runtime.IgnoreSSL) != true {
+			trans.TLSClientConfig = &tls.Config{
+				InsecureSkipVerify: false,
 			}
-			trans.TLSClientConfig.RootCAs = clientCertPool
-		}
-	} else {
-		trans.TLSClientConfig = &tls.Config{
-			InsecureSkipVerify: BoolValue(runtime.IgnoreSSL),
+			if runtime.Key != nil && runtime.Cert != nil && StringValue(runtime.Key) != "" && StringValue(runtime.Cert) != "" {
+				cert, err := tls.X509KeyPair([]byte(StringValue(runtime.Cert)), []byte(StringValue(runtime.Key)))
+				if err != nil {
+					return nil, err
+				}
+				trans.TLSClientConfig.Certificates = []tls.Certificate{cert}
+			}
+			if runtime.CA != nil && StringValue(runtime.CA) != "" {
+				clientCertPool := x509.NewCertPool()
+				ok := clientCertPool.AppendCertsFromPEM([]byte(StringValue(runtime.CA)))
+				if !ok {
+					return nil, errors.New("Failed to parse root certificate")
+				}
+				trans.TLSClientConfig.RootCAs = clientCertPool
+			}
+		} else {
+			trans.TLSClientConfig = &tls.Config{
+				InsecureSkipVerify: true,
+			}
 		}
 	}
 	if httpProxy != nil {
@@ -495,6 +503,10 @@ func getHttpTransport(req *Request, runtime *RuntimeObject) (*http.Transport, er
 		}
 	} else {
 		trans.DialContext = setDialContext(runtime)
+	}
+	if runtime.MaxIdleConns != nil && *runtime.MaxIdleConns > 0 {
+		trans.MaxIdleConns = IntValue(runtime.MaxIdleConns)
+		trans.MaxIdleConnsPerHost = IntValue(runtime.MaxIdleConns)
 	}
 	return trans, nil
 }

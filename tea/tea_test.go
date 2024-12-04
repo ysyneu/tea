@@ -168,6 +168,7 @@ func TestSDKError(t *testing.T) {
 			"httpCode":  "404",
 			"requestId": "dfadfa32cgfdcasd4313",
 			"hostId":    "github.com/alibabacloud/tea",
+			"recommend": "https://中文?q=a.b&product=c&requestId=123",
 		},
 		"description": "description",
 		"accessDeniedDetail": map[string]interface{}{
@@ -179,7 +180,7 @@ func TestSDKError(t *testing.T) {
 		},
 	})
 	utils.AssertNotNil(t, err)
-	utils.AssertEqual(t, "SDKError:\n   StatusCode: 404\n   Code: code\n   Message: message\n   Data: {\"hostId\":\"github.com/alibabacloud/tea\",\"httpCode\":\"404\",\"requestId\":\"dfadfa32cgfdcasd4313\"}\n", err.Error())
+	utils.AssertEqual(t, "SDKError:\n   StatusCode: 404\n   Code: code\n   Message: message\n   Data: {\"hostId\":\"github.com/alibabacloud/tea\",\"httpCode\":\"404\",\"recommend\":\"https://中文?q=a.b&product=c&requestId=123\",\"requestId\":\"dfadfa32cgfdcasd4313\"}\n", err.Error())
 
 	err.SetErrMsg("test")
 	utils.AssertEqual(t, "test", err.Error())
@@ -542,20 +543,32 @@ func Test_DoRequest(t *testing.T) {
 
 	runtimeObj["key"] = "private rsa key"
 	runtimeObj["cert"] = "private certification"
+	runtimeObj["ca"] = "private ca"
 	runtimeObj["ignoreSSL"] = true
 	resp, err = DoRequest(request, runtimeObj)
+	utils.AssertNil(t, err)
+	utils.AssertNotNil(t, resp)
+
+	// update the host is to restart a client
+	request.Headers["host"] = String("a.com")
+	runtimeObj["ignoreSSL"] = false
+	resp, err = DoRequest(request, runtimeObj)
 	utils.AssertNotNil(t, err)
+	utils.AssertEqual(t, "tls: failed to find any PEM data in certificate input", err.Error())
 	utils.AssertNil(t, resp)
 
+	// update the host is to restart a client
+	request.Headers["host"] = String("b.com")
 	runtimeObj["key"] = key
 	runtimeObj["cert"] = cert
 	runtimeObj["ca"] = "private ca"
-	runtimeObj["socks5Proxy"] = "socks5://someuser:somepassword@cs.aliyun.com"
 	_, err = DoRequest(request, runtimeObj)
 	utils.AssertNotNil(t, err)
+	utils.AssertEqual(t, "Failed to parse root certificate", err.Error())
 
+	// update the host is to restart a client
+	request.Headers["host"] = String("c.com")
 	runtimeObj["ca"] = ca
-	runtimeObj["socks5Proxy"] = "socks5://someuser:somepassword@cs.aliyuncs.com"
 	resp, err = DoRequest(request, runtimeObj)
 	utils.AssertNil(t, err)
 	utils.AssertEqual(t, "test", StringValue(resp.Headers["tea"]))
@@ -565,6 +578,20 @@ func Test_DoRequest(t *testing.T) {
 	resp, err = DoRequest(request, runtimeObj)
 	utils.AssertNil(t, err)
 	utils.AssertEqual(t, "test", StringValue(resp.Headers["tea"]))
+
+	hookDo = func(fn func(req *http.Request) (*http.Response, error)) func(req *http.Request) (*http.Response, error) {
+		return func(req *http.Request) (*http.Response, error) {
+			utils.AssertEqual(t, "tea-cn-hangzhou.aliyuncs.com:1080", req.Host)
+			return mockResponse(200, ``, errors.New("Internal error"))
+		}
+	}
+	request.Pathname = String("/log")
+	request.Protocol = String("http")
+	request.Port = Int(1080)
+	request.Headers["host"] = String("tea-cn-hangzhou.aliyuncs.com")
+	resp, err = DoRequest(request, runtimeObj)
+	utils.AssertNil(t, resp)
+	utils.AssertEqual(t, `Internal error`, err.Error())
 }
 
 func Test_DoRequestWithConcurrent(t *testing.T) {
