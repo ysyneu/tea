@@ -184,6 +184,39 @@ func Convert(in interface{}, out interface{}) error {
 	return err
 }
 
+// ConvertChan converts the source data to the target type and sends it to the specified channel.
+// @param src - source data
+// @param destChan - target channel
+// @return error - error during the conversion process
+func ConvertChan(src interface{}, destChan interface{}) error {
+	destChanValue := reflect.ValueOf(destChan)
+	if destChanValue.Kind() != reflect.Chan {
+		return fmt.Errorf("destChan must be a channel")
+	}
+
+	if destChanValue.Type().ChanDir() == reflect.SendDir {
+		return fmt.Errorf("destChan must be a receive or bidirectional channel")
+	}
+
+	elemType := destChanValue.Type().Elem()
+
+	destValue := reflect.New(elemType).Interface()
+
+	err := Convert(src, destValue)
+	if err != nil {
+		return err
+	}
+	destValueElem := reflect.ValueOf(destValue).Elem()
+
+	defer func() {
+		if r := recover(); r != nil {
+		}
+	}()
+
+	destChanValue.TrySend(destValueElem)
+	return nil
+}
+
 // Recover is used to format error
 func Recover(in interface{}) error {
 	if in == nil {

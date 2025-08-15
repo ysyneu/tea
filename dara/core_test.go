@@ -193,6 +193,150 @@ func TestConvertType(t *testing.T) {
 	utils.AssertEqual(t, "test", string(out.Body))
 }
 
+// TestConvertChan tests the ConvertChan function
+func TestConvertChan(t *testing.T) {
+	// Test case 1: Successful conversion and sending to channel
+	t.Run("SuccessfulConversion", func(t *testing.T) {
+		// Create a channel to receive the converted data
+		ch := make(chan test, 1)
+
+		// Source data to convert
+		src := map[string]interface{}{
+			"key":  123,
+			"body": []byte("test"),
+		}
+
+		// Perform conversion
+		err := ConvertChan(src, ch)
+
+		// Check for errors
+		if err != nil {
+			t.Errorf("Expected no error, got %v", err)
+		}
+		utils.AssertNil(t, err)
+
+		// Check if data was sent to channel
+		select {
+		case result := <-ch:
+			utils.AssertEqual(t, "123", result.Key)
+			utils.AssertEqual(t, "test", string(result.Body))
+		}
+	})
+
+	// Test case 2: Invalid destination channel (not a channel)
+	t.Run("InvalidDestChan", func(t *testing.T) {
+		src := map[string]interface{}{
+			"test": "data",
+		}
+
+		// Pass a non-channel type
+		err := ConvertChan(src, "not_a_channel")
+
+		if err == nil {
+			t.Error("Expected error for invalid channel, got nil")
+		}
+
+		expected := "destChan must be a channel"
+		if err.Error() != expected {
+			t.Errorf("Expected error message '%s', got '%s'", expected, err.Error())
+		}
+	})
+
+	// Test case 3: Send-only channel
+	t.Run("SendOnlyChannel", func(t *testing.T) {
+		// Create a send-only channel
+		ch := make(chan<- map[string]interface{}, 1)
+
+		src := map[string]interface{}{
+			"test": "data",
+		}
+
+		err := ConvertChan(src, ch)
+
+		if err == nil {
+			t.Error("Expected error for send-only channel, got nil")
+		}
+
+		expected := "destChan must be a receive or bidirectional channel"
+		if err.Error() != expected {
+			t.Errorf("Expected error message '%s', got '%s'", expected, err.Error())
+		}
+	})
+
+	// Test case 4: Conversion with struct
+	t.Run("StructConversion", func(t *testing.T) {
+		type TestStruct struct {
+			Name string `json:"name"`
+			Age  int    `json:"age"`
+		}
+
+		ch := make(chan TestStruct, 1)
+
+		// Source data matching struct fields
+		src := map[string]interface{}{
+			"name": "Alice",
+			"age":  30,
+		}
+
+		err := ConvertChan(src, ch)
+
+		if err != nil {
+			t.Errorf("Expected no error, got %v", err)
+		}
+
+		select {
+		case result := <-ch:
+			if result.Name != "Alice" || result.Age != 30 {
+				t.Errorf("Expected {Name: Alice, Age: 30}, got %v", result)
+			}
+		default:
+			t.Error("Expected data in channel, but channel is empty")
+		}
+	})
+
+	// Test case 5: Nil source data
+	t.Run("NilSource", func(t *testing.T) {
+		ch := make(chan map[string]interface{}, 1)
+
+		err := ConvertChan(nil, ch)
+
+		// Depending on implementation, this might error or succeed
+		// Here we're testing it doesn't panic
+		if err != nil {
+			// If there's an error, that's fine, just make sure it's handled
+			t.Logf("Nil source resulted in error (acceptable): %v", err)
+		} else {
+			// If no error, check what was sent
+			select {
+			case result := <-ch:
+				if result == nil {
+					t.Log("Nil source correctly handled")
+				} else {
+					t.Errorf("Expected nil or error, got %v", result)
+				}
+			default:
+				t.Log("Channel empty after nil source, which is acceptable")
+			}
+		}
+	})
+}
+
+// BenchmarkConvertChan benchmarks the ConvertChan function
+func BenchmarkConvertChan(b *testing.B) {
+	ch := make(chan map[string]interface{}, 1)
+	src := map[string]interface{}{
+		"name":   "benchmark_test",
+		"value":  12345,
+		"active": true,
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = ConvertChan(src, ch)
+		<-ch // Clear the channel
+	}
+}
+
 func TestRuntimeObject(t *testing.T) {
 	runtimeobject := NewRuntimeObject(nil)
 	utils.AssertNil(t, runtimeobject.IgnoreSSL)
