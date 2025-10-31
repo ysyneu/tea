@@ -1,23 +1,24 @@
-package tea
+package dara
 
 import (
+	"bytes"
 	"encoding/json"
+	jsoniter "github.com/json-iterator/go"
+	"github.com/modern-go/reflect2"
 	"io"
+	"io/ioutil"
 	"math"
 	"reflect"
 	"strconv"
 	"strings"
 	"unsafe"
-
-	jsoniter "github.com/json-iterator/go"
-	"github.com/modern-go/reflect2"
 )
-
-var jsonParser jsoniter.API
 
 const maxUint = ^uint(0)
 const maxInt = int(maxUint >> 1)
 const minInt = -maxInt - 1
+
+var jsonParser jsoniter.API
 
 func init() {
 	jsonParser = jsoniter.Config{
@@ -330,4 +331,59 @@ func (decoder *nullableFuzzyFloat64Decoder) Decode(ptr unsafe.Pointer, iter *jso
 	default:
 		iter.ReportError("nullableFuzzyFloat64Decoder", "not number or string")
 	}
+}
+
+func Stringify(a interface{}) string {
+	switch v := a.(type) {
+	case *string:
+		return StringValue(v)
+	case string:
+		return v
+	case []byte:
+		return string(v)
+	case io.Reader:
+		byt, err := ioutil.ReadAll(v)
+		if err != nil {
+			return ""
+		}
+		return string(byt)
+	}
+	byt := bytes.NewBuffer([]byte{})
+	jsonEncoder := json.NewEncoder(byt)
+	jsonEncoder.SetEscapeHTML(false)
+	if err := jsonEncoder.Encode(a); err != nil {
+		return ""
+	}
+	return string(bytes.TrimSpace(byt.Bytes()))
+}
+
+func ParseJSON(a string) interface{} {
+	mapTmp := make(map[string]interface{})
+	d := json.NewDecoder(bytes.NewReader([]byte(a)))
+	d.UseNumber()
+	err := d.Decode(&mapTmp)
+	if err == nil {
+		return mapTmp
+	}
+
+	sliceTmp := make([]interface{}, 0)
+	d = json.NewDecoder(bytes.NewReader([]byte(a)))
+	d.UseNumber()
+	err = d.Decode(&sliceTmp)
+	if err == nil {
+		return sliceTmp
+	}
+
+	if num, err := strconv.Atoi(a); err == nil {
+		return num
+	}
+
+	if ok, err := strconv.ParseBool(a); err == nil {
+		return ok
+	}
+
+	if floa64tVal, err := strconv.ParseFloat(a, 64); err == nil {
+		return floa64tVal
+	}
+	return nil
 }

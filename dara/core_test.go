@@ -1,4 +1,4 @@
-package tea
+package dara
 
 import (
 	"bytes"
@@ -30,6 +30,12 @@ var runtimeObj = map[string]interface{}{
 	"listener":      &Progresstest{},
 	"tracker":       &utils.ReaderTracker{CompletedBytes: int64(10)},
 	"logger":        utils.NewLogger("info", "", &bytes.Buffer{}, "{time}"),
+	"retryOptions": &RetryOptions{
+		Retryable: true,
+		RetryCondition: []*RetryCondition{
+			{MaxAttempts: 3, Exception: []string{"AErr"}, ErrorCode: []string{"A1Err"}},
+		},
+	},
 }
 
 var key = `-----BEGIN RSA PRIVATE KEY-----
@@ -41,6 +47,7 @@ DLvYCDUKvOj3GzsV1dtBwWuHBaZEafQDAiEAtTnrel//7z5/U55ow4BW0gmrkQM9
 bXIhEZ59zryZzl0CIQDFmBqRCu9eshecCP7kd3n88IjopSTOV4iUypBfyXcRnwIg
 eXNxUx+BCu2We36+c0deE2+vizL1s6f5XhE6l4bqtiM=
 -----END RSA PRIVATE KEY-----`
+
 var cert = `-----BEGIN CERTIFICATE-----
 MIIBvDCCAWYCCQDKjNYQxar0mjANBgkqhkiG9w0BAQsFADBlMQswCQYDVQQGEwJh
 czEMMAoGA1UECAwDYXNmMQwwCgYDVQQHDANzYWQxCzAJBgNVBAoMAnNkMQ0wCwYD
@@ -53,6 +60,7 @@ mwi96Is7P0ZxzybaZlLGy3aoYgjTSxymIQIDAQABMA0GCSqGSIb3DQEBCwUAA0EA
 ZjePopbFugNK0US1MM48V1S2petIsEcxbZBEk/wGqIzrY4RCFKMtbtPSgTDUl3D9
 XePemktG22a54ItVJ5FpcQ==
 -----END CERTIFICATE-----`
+
 var ca = `-----BEGIN CERTIFICATE-----
 MIIBuDCCAWICCQCLw4OWpjlJCDANBgkqhkiG9w0BAQsFADBjMQswCQYDVQQGEwJm
 ZDEMMAoGA1UECAwDYXNkMQswCQYDVQQHDAJxcjEKMAgGA1UECgwBZjEMMAoGA1UE
@@ -185,12 +193,160 @@ func TestConvertType(t *testing.T) {
 	utils.AssertEqual(t, "test", string(out.Body))
 }
 
+// TestConvertChan tests the ConvertChan function
+func TestConvertChan(t *testing.T) {
+	// Test case 1: Successful conversion and sending to channel
+	t.Run("SuccessfulConversion", func(t *testing.T) {
+		// Create a channel to receive the converted data
+		ch := make(chan test, 1)
+
+		// Source data to convert
+		src := map[string]interface{}{
+			"key":  123,
+			"body": []byte("test"),
+		}
+
+		// Perform conversion
+		err := ConvertChan(src, ch)
+
+		// Check for errors
+		if err != nil {
+			t.Errorf("Expected no error, got %v", err)
+		}
+		utils.AssertNil(t, err)
+
+		// Check if data was sent to channel
+		select {
+		case result := <-ch:
+			utils.AssertEqual(t, "123", result.Key)
+			utils.AssertEqual(t, "test", string(result.Body))
+		}
+	})
+
+	// Test case 2: Invalid destination channel (not a channel)
+	t.Run("InvalidDestChan", func(t *testing.T) {
+		src := map[string]interface{}{
+			"test": "data",
+		}
+
+		// Pass a non-channel type
+		err := ConvertChan(src, "not_a_channel")
+
+		if err == nil {
+			t.Error("Expected error for invalid channel, got nil")
+		}
+
+		expected := "destChan must be a channel"
+		if err.Error() != expected {
+			t.Errorf("Expected error message '%s', got '%s'", expected, err.Error())
+		}
+	})
+
+	// Test case 3: Send-only channel
+	t.Run("SendOnlyChannel", func(t *testing.T) {
+		// Create a send-only channel
+		ch := make(chan<- map[string]interface{}, 1)
+
+		src := map[string]interface{}{
+			"test": "data",
+		}
+
+		err := ConvertChan(src, ch)
+
+		if err == nil {
+			t.Error("Expected error for send-only channel, got nil")
+		}
+
+		expected := "destChan must be a receive or bidirectional channel"
+		if err.Error() != expected {
+			t.Errorf("Expected error message '%s', got '%s'", expected, err.Error())
+		}
+	})
+
+	// Test case 4: Conversion with struct
+	t.Run("StructConversion", func(t *testing.T) {
+		type TestStruct struct {
+			Name string `json:"name"`
+			Age  int    `json:"age"`
+		}
+
+		ch := make(chan TestStruct, 1)
+
+		// Source data matching struct fields
+		src := map[string]interface{}{
+			"name": "Alice",
+			"age":  30,
+		}
+
+		err := ConvertChan(src, ch)
+
+		if err != nil {
+			t.Errorf("Expected no error, got %v", err)
+		}
+
+		select {
+		case result := <-ch:
+			if result.Name != "Alice" || result.Age != 30 {
+				t.Errorf("Expected {Name: Alice, Age: 30}, got %v", result)
+			}
+		default:
+			t.Error("Expected data in channel, but channel is empty")
+		}
+	})
+
+	// Test case 5: Nil source data
+	t.Run("NilSource", func(t *testing.T) {
+		ch := make(chan map[string]interface{}, 1)
+
+		err := ConvertChan(nil, ch)
+
+		// Depending on implementation, this might error or succeed
+		// Here we're testing it doesn't panic
+		if err != nil {
+			// If there's an error, that's fine, just make sure it's handled
+			t.Logf("Nil source resulted in error (acceptable): %v", err)
+		} else {
+			// If no error, check what was sent
+			select {
+			case result := <-ch:
+				if result == nil {
+					t.Log("Nil source correctly handled")
+				} else {
+					t.Errorf("Expected nil or error, got %v", result)
+				}
+			default:
+				t.Log("Channel empty after nil source, which is acceptable")
+			}
+		}
+	})
+}
+
+// BenchmarkConvertChan benchmarks the ConvertChan function
+func BenchmarkConvertChan(b *testing.B) {
+	ch := make(chan map[string]interface{}, 1)
+	src := map[string]interface{}{
+		"name":   "benchmark_test",
+		"value":  12345,
+		"active": true,
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = ConvertChan(src, ch)
+		<-ch // Clear the channel
+	}
+}
+
 func TestRuntimeObject(t *testing.T) {
 	runtimeobject := NewRuntimeObject(nil)
 	utils.AssertNil(t, runtimeobject.IgnoreSSL)
 
 	runtimeobject = NewRuntimeObject(runtimeObj)
 	utils.AssertEqual(t, false, BoolValue(runtimeobject.IgnoreSSL))
+
+	utils.AssertEqual(t, true, runtimeobject.RetryOptions.Retryable)
+
+	utils.AssertEqual(t, 1, len(runtimeobject.RetryOptions.RetryCondition))
 }
 
 func TestSDKError(t *testing.T) {
@@ -349,11 +505,27 @@ type Test struct {
 }
 
 func TestToMap(t *testing.T) {
+	inStr := map[string]string{
+		"tea":  "test",
+		"test": "test2",
+	}
+	result := ToMap(inStr)
+	utils.AssertEqual(t, "test", result["tea"])
+	utils.AssertEqual(t, "test2", result["test"])
+
+	inInt := map[string]int{
+		"tea":  12,
+		"test": 13,
+	}
+	result = ToMap(inInt)
+	utils.AssertEqual(t, 12, result["tea"])
+	utils.AssertEqual(t, 13, result["test"])
+
 	in := map[string]*string{
 		"tea": String("test"),
 		"nil": nil,
 	}
-	result := ToMap(in)
+	result = ToMap(in)
 	utils.AssertEqual(t, "test", result["tea"])
 	utils.AssertNil(t, result["nil"])
 
@@ -480,7 +652,7 @@ func Test_GetBackoffTime(t *testing.T) {
 	ms = GetBackoffTime(backoff, Int(1))
 	utils.AssertEqual(t, 0, IntValue(ms))
 
-	Sleep(Int(1))
+	Sleep(1)
 
 	backoff["period"] = 3
 	ms = GetBackoffTime(backoff, Int(1))
@@ -515,8 +687,8 @@ func (client *httpClient) Call(request *http.Request, transport *http.Transport)
 func Test_DoRequest(t *testing.T) {
 	origTestHookDo := hookDo
 	defer func() { hookDo = origTestHookDo }()
-	hookDo = func(fn func(req *http.Request) (*http.Response, error)) func(req *http.Request) (*http.Response, error) {
-		return func(req *http.Request) (*http.Response, error) {
+	hookDo = func(fn func(req *http.Request, transport *http.Transport) (*http.Response, error)) func(req *http.Request, transport *http.Transport) (*http.Response, error) {
+		return func(req *http.Request, transport *http.Transport) (*http.Response, error) {
 			return mockResponse(200, ``, errors.New("Internal error"))
 		}
 	}
@@ -532,7 +704,7 @@ func Test_DoRequest(t *testing.T) {
 		"tea": String("test"),
 	}
 	runtimeObj["httpsProxy"] = "# #%gfdf"
-	resp, err = DoRequest(request, runtimeObj)
+	resp, err = DoRequest(request, NewRuntimeObject(runtimeObj))
 	utils.AssertNil(t, resp)
 	utils.AssertContains(t, err.Error(), `invalid URL escape "%gf"`)
 
@@ -540,29 +712,29 @@ func Test_DoRequest(t *testing.T) {
 	request.Headers["tea"] = String("")
 	request.Headers["content-length"] = nil
 	runtimeObj["httpsProxy"] = "http://someuser:somepassword@ecs.aliyun.com"
-	resp, err = DoRequest(request, runtimeObj)
+	resp, err = DoRequest(request, NewRuntimeObject(runtimeObj))
 	utils.AssertNil(t, resp)
 	utils.AssertEqual(t, `Internal error`, err.Error())
 
 	request.Headers["host"] = String("tea-cn-hangzhou.aliyuncs.com:80")
 	request.Headers["user-agent"] = String("test")
-	resp, err = DoRequest(request, runtimeObj)
+	resp, err = DoRequest(request, NewRuntimeObject(runtimeObj))
 	utils.AssertNil(t, resp)
 	utils.AssertEqual(t, `Internal error`, err.Error())
 
 	runtimeObj["socks5Proxy"] = "# #%gfdf"
-	resp, err = DoRequest(request, runtimeObj)
+	resp, err = DoRequest(request, NewRuntimeObject(runtimeObj))
 	utils.AssertNil(t, resp)
 	utils.AssertContains(t, err.Error(), ` invalid URL escape "%gf"`)
 
-	hookDo = func(fn func(req *http.Request) (*http.Response, error)) func(req *http.Request) (*http.Response, error) {
-		return func(req *http.Request) (*http.Response, error) {
+	hookDo = func(fn func(req *http.Request, transport *http.Transport) (*http.Response, error)) func(req *http.Request, transport *http.Transport) (*http.Response, error) {
+		return func(req *http.Request, transport *http.Transport) (*http.Response, error) {
 			return mockResponse(200, ``, nil)
 		}
 	}
 	runtimeObj["socks5Proxy"] = "socks5://someuser:somepassword@ecs.aliyun.com"
 	runtimeObj["localAddr"] = "127.0.0.1"
-	resp, err = DoRequest(request, runtimeObj)
+	resp, err = DoRequest(request, NewRuntimeObject(runtimeObj))
 	utils.AssertNil(t, err)
 	utils.AssertEqual(t, "test", StringValue(resp.Headers["tea"]))
 
@@ -570,14 +742,14 @@ func Test_DoRequest(t *testing.T) {
 	runtimeObj["cert"] = "private certification"
 	runtimeObj["ca"] = "private ca"
 	runtimeObj["ignoreSSL"] = true
-	resp, err = DoRequest(request, runtimeObj)
+	resp, err = DoRequest(request, NewRuntimeObject(runtimeObj))
 	utils.AssertNil(t, err)
 	utils.AssertNotNil(t, resp)
 
 	// update the host is to restart a client
 	request.Headers["host"] = String("a.com")
 	runtimeObj["ignoreSSL"] = false
-	resp, err = DoRequest(request, runtimeObj)
+	resp, err = DoRequest(request, NewRuntimeObject(runtimeObj))
 	utils.AssertNotNil(t, err)
 	utils.AssertEqual(t, "tls: failed to find any PEM data in certificate input", err.Error())
 	utils.AssertNil(t, resp)
@@ -587,25 +759,25 @@ func Test_DoRequest(t *testing.T) {
 	runtimeObj["key"] = key
 	runtimeObj["cert"] = cert
 	runtimeObj["ca"] = "private ca"
-	_, err = DoRequest(request, runtimeObj)
+	_, err = DoRequest(request, NewRuntimeObject(runtimeObj))
 	utils.AssertNotNil(t, err)
 	utils.AssertEqual(t, "Failed to parse root certificate", err.Error())
 
 	// update the host is to restart a client
 	request.Headers["host"] = String("c.com")
 	runtimeObj["ca"] = ca
-	resp, err = DoRequest(request, runtimeObj)
+	resp, err = DoRequest(request, NewRuntimeObject(runtimeObj))
 	utils.AssertNil(t, err)
 	utils.AssertEqual(t, "test", StringValue(resp.Headers["tea"]))
 
 	request.Protocol = String("HTTP")
 	runtimeObj["ignoreSSL"] = false
-	resp, err = DoRequest(request, runtimeObj)
+	resp, err = DoRequest(request, NewRuntimeObject(runtimeObj))
 	utils.AssertNil(t, err)
 	utils.AssertEqual(t, "test", StringValue(resp.Headers["tea"]))
 
-	hookDo = func(fn func(req *http.Request) (*http.Response, error)) func(req *http.Request) (*http.Response, error) {
-		return func(req *http.Request) (*http.Response, error) {
+	hookDo = func(fn func(req *http.Request, transport *http.Transport) (*http.Response, error)) func(req *http.Request, transport *http.Transport) (*http.Response, error) {
+		return func(req *http.Request, transport *http.Transport) (*http.Response, error) {
 			utils.AssertEqual(t, "tea-cn-hangzhou.aliyuncs.com:1080", req.Host)
 			return mockResponse(200, ``, errors.New("Internal error"))
 		}
@@ -614,23 +786,58 @@ func Test_DoRequest(t *testing.T) {
 	request.Protocol = String("http")
 	request.Port = Int(1080)
 	request.Headers["host"] = String("tea-cn-hangzhou.aliyuncs.com")
-	resp, err = DoRequest(request, runtimeObj)
+	resp, err = DoRequest(request, NewRuntimeObject(runtimeObj))
 	utils.AssertNil(t, resp)
 	utils.AssertEqual(t, `Internal error`, err.Error())
 
 	httpClient, err := newHttpClient()
 	utils.AssertNil(t, err)
 	runtimeObj["httpClient"] = httpClient
-	resp, err = DoRequest(request, runtimeObj)
+	resp, err = DoRequest(request, NewRuntimeObject(runtimeObj))
 	utils.AssertNil(t, resp)
 	utils.AssertEqual(t, `Internal error`, err.Error())
+}
+
+func Test_DoRequestWithContextCancellation(t *testing.T) {
+	origTestHookDo := hookDo
+	defer func() { hookDo = origTestHookDo }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Millisecond)
+	defer cancel()
+
+	hookDo = func(fn func(req *http.Request, transport *http.Transport) (*http.Response, error)) func(req *http.Request, transport *http.Transport) (*http.Response, error) {
+		return func(req *http.Request, transport *http.Transport) (*http.Response, error) {
+			select {
+			case <-time.After(2 * time.Second):
+				return &http.Response{StatusCode: 200, Header: http.Header{}, Body: http.NoBody}, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+	}
+
+	request := &Request{
+		Method:   String("GET"),
+		Protocol: String("http"),
+		Headers:  map[string]*string{"host": String("ecs.cn-hangzhou.aliyuncs.com")},
+	}
+
+	runtimeObject := &RuntimeObject{}
+
+	resp, err := DoRequestWithCtx(ctx, request, runtimeObject)
+
+	utils.AssertNil(t, resp)
+	if err == nil {
+		t.Fatal("Expected an error due to context timeout, got nil")
+	}
+	utils.AssertContains(t, err.Error(), "context deadline exceeded")
 }
 
 func Test_DoRequestWithConcurrent(t *testing.T) {
 	origTestHookDo := hookDo
 	defer func() { hookDo = origTestHookDo }()
-	hookDo = func(fn func(req *http.Request) (*http.Response, error)) func(req *http.Request) (*http.Response, error) {
-		return func(req *http.Request) (*http.Response, error) {
+	hookDo = func(fn func(req *http.Request, transport *http.Transport) (*http.Response, error)) func(req *http.Request, transport *http.Transport) (*http.Response, error) {
+		return func(req *http.Request, transport *http.Transport) (*http.Response, error) {
 			return mockResponse(200, ``, nil)
 		}
 	}
@@ -638,9 +845,9 @@ func Test_DoRequestWithConcurrent(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		wg.Add(1)
 		go func(readTimeout int) {
-			runtime := map[string]interface{}{
+			runtime := NewRuntimeObject(map[string]interface{}{
 				"readTimeout": readTimeout,
-			}
+			})
 			for j := 0; j < 50; j++ {
 				wg.Add(1)
 				go func() {
@@ -652,6 +859,53 @@ func Test_DoRequestWithConcurrent(t *testing.T) {
 				}()
 			}
 			wg.Done()
+		}(i)
+	}
+	wg.Wait()
+}
+
+func Test_DoRequestWithConcurrentAndContext(t *testing.T) {
+	origTestHookDo := hookDo
+	defer func() { hookDo = origTestHookDo }()
+	hookDo = func(fn func(req *http.Request, transport *http.Transport) (*http.Response, error)) func(req *http.Request, transport *http.Transport) (*http.Response, error) {
+		return func(req *http.Request, transport *http.Transport) (*http.Response, error) {
+			time.Sleep(100 * time.Millisecond) // 模拟请求延迟
+			return mockResponse(200, ``, nil)
+		}
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func(readTimeout int) {
+			defer wg.Done()
+
+			// 每个 goroutine 有自己的上下文，设定超时控制在 500 毫秒
+			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+			defer cancel()
+
+			runtime := NewRuntimeObject(map[string]interface{}{
+				"readTimeout": readTimeout,
+				"ctx":         ctx, // 将上下文集成到运行时对象中
+			})
+
+			for j := 0; j < 50; j++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+
+					request := NewRequest()
+					resp, err := DoRequest(request, runtime)
+
+					if err != nil {
+						// 检查是否是由于上下文超时导致的错误
+						utils.AssertContains(t, err.Error(), "context deadline exceeded")
+					} else {
+						utils.AssertNil(t, err)
+						utils.AssertNotNil(t, resp)
+					}
+				}()
+			}
 		}(i)
 	}
 	wg.Wait()
@@ -726,11 +980,11 @@ func Test_SetDialContext(t *testing.T) {
 }
 
 func Test_hookdo(t *testing.T) {
-	fn := func(req *http.Request) (*http.Response, error) {
+	fn := func(req *http.Request, transport *http.Transport) (*http.Response, error) {
 		return nil, errors.New("hookdo")
 	}
 	result := hookDo(fn)
-	resp, err := result(nil)
+	resp, err := result(nil, nil)
 	utils.AssertNil(t, resp)
 	utils.AssertEqual(t, "hookdo", err.Error())
 }
@@ -765,6 +1019,42 @@ func Test_ToReader(t *testing.T) {
 	utils.AssertEqual(t, "", string(byt))
 }
 
+func Test_ToWriter(t *testing.T) {
+	str := "abc"
+	writer := ToWriter(str).(*bytes.Buffer)
+	utils.AssertEqual(t, "abc", writer.String())
+
+	strPtr := new(string)
+	*strPtr = "def"
+	writer = ToWriter(strPtr).(*bytes.Buffer)
+	utils.AssertEqual(t, "def", writer.String())
+
+	bytesData := []byte("ghi")
+	writer = ToWriter(bytesData).(*bytes.Buffer)
+	utils.AssertEqual(t, "ghi", writer.String())
+
+	buffer := new(bytes.Buffer)
+	writer = ToWriter(buffer).(*bytes.Buffer)
+	utils.AssertEqual(t, buffer, writer)
+
+	fileWriter := ToWriter(os.Stdout)
+	utils.AssertEqual(t, os.Stdout, fileWriter)
+
+	var buf bytes.Buffer
+	writer2 := ToWriter(&buf)
+	writer2.Write([]byte("test"))
+	utils.AssertEqual(t, "test", buf.String())
+
+	// Test a non-writer to trigger panic
+	defer func() {
+		if r := recover(); r != nil {
+			utils.AssertEqual(t, "Invalid Writer. Please provide a valid Writer.", r)
+		}
+	}()
+	num := 10
+	ToWriter(num) // This should cause a panic
+}
+
 func Test_ToString(t *testing.T) {
 	str := ToString(10)
 	utils.AssertEqual(t, "10", str)
@@ -774,6 +1064,7 @@ func Test_ToString(t *testing.T) {
 }
 
 func Test_Validate(t *testing.T) {
+	var tmp *validateTest
 	num := 3
 	config := &validateTest{
 		Num1: &num,
@@ -783,8 +1074,6 @@ func Test_Validate(t *testing.T) {
 
 	err = Validate(new(validateTest))
 	utils.AssertEqual(t, err.Error(), "num1 should be setted")
-
-	var tmp *validateTest
 	err = Validate(tmp)
 	utils.AssertNil(t, err)
 
@@ -941,4 +1230,279 @@ func Test_TransInt32AndInt(t *testing.T) {
 
 	b := ToInt32(a)
 	utils.AssertEqual(t, Int32Value(b), int32(10))
+}
+
+func Test_Default(t *testing.T) {
+	a := ToInt(Int32(10))
+	utils.AssertEqual(t, IntValue(a), 10)
+
+	b := ToInt32(a)
+	utils.AssertEqual(t, Int32Value(b), int32(10))
+
+	// Testing Default with nil values
+	if result := Default(nil, "default"); result != "default" {
+		t.Errorf("expected 'default', got '%v'", result)
+	}
+
+	// Testing Default with zero values
+	if result := Default("", "default"); result != "default" {
+		t.Errorf("expected 'default', got '%v'", result)
+	}
+
+	if result := Default(0, 42); result != 42 {
+		t.Errorf("expected 42, got %v", result)
+	}
+
+	if result := Default(false, true); result != true {
+		t.Errorf("expected true, got %v", result)
+	}
+
+	// Testing Default with non-zero values
+	if result := Default("value", "default"); result != "value" {
+		t.Errorf("expected 'value', got '%v'", result)
+	}
+
+	if result := Default([]int{1, 2, 3}, []int{}); !reflect.DeepEqual(result, []int{1, 2, 3}) {
+		t.Errorf("expected [1 2 3], got '%v'", result)
+	}
+}
+
+func TestToBytes(t *testing.T) {
+	tests := []struct {
+		input        string
+		encodingType string
+		expected     []byte
+	}{
+		{"Hello, World!", "utf8", []byte("Hello, World!")},
+		{"SGVsbG8sIFdvcmxkIQ==", "base64", []byte("Hello, World!")},
+		{"48656c6c6f2c20576f726c6421", "hex", []byte("Hello, World!")},
+		{"invalid base64", "base64", nil},
+		{"invalid hex", "hex", nil},
+		{"unsupported", "unsupported", nil},
+	}
+
+	for _, tt := range tests {
+		result := ToBytes(tt.input, tt.encodingType)
+
+		if !reflect.DeepEqual(result, tt.expected) {
+			t.Errorf("ToBytes(%q, %q) = %v, want %v",
+				tt.input, tt.encodingType, result, tt.expected)
+		}
+	}
+}
+
+func TestForceInt(t *testing.T) {
+	tests := []struct {
+		input    interface{}
+		expected int
+	}{
+		{int(42), 42},
+		{int(-10), -10},
+		{nil, 0}, // nil should return zero value for int
+	}
+
+	for _, test := range tests {
+		result := ForceInt(test.input)
+		if result != test.expected {
+			t.Errorf("ForceInt(%v) = %v; want %v", test.input, result, test.expected)
+		}
+	}
+}
+
+func TestForceBoolean(t *testing.T) {
+	tests := []struct {
+		input    interface{}
+		expected bool
+	}{
+		{true, true},
+		{false, false},
+		{nil, false}, // nil should return zero value for bool
+	}
+
+	for _, test := range tests {
+		result := ForceBoolean(test.input)
+		if result != test.expected {
+			t.Errorf("ForceBoolean(%v) = %v; want %v", test.input, result, test.expected)
+		}
+	}
+}
+
+func TestForceInt32(t *testing.T) {
+	tests := []struct {
+		input    interface{}
+		expected int32
+	}{
+		{int32(42), 42},
+		{int32(-10), -10},
+		{nil, 0}, // nil should return zero value for int32
+	}
+
+	for _, test := range tests {
+		result := ForceInt32(test.input)
+		if result != test.expected {
+			t.Errorf("ForceInt32(%v) = %v; want %v", test.input, result, test.expected)
+		}
+	}
+}
+
+func TestForceUInt32(t *testing.T) {
+	tests := []struct {
+		input    interface{}
+		expected uint32
+	}{
+		{uint32(100), 100},
+		{uint32(0), 0},
+		{nil, 0}, // nil should return zero value for uint32
+	}
+
+	for _, test := range tests {
+		result := ForceUInt32(test.input)
+		if result != test.expected {
+			t.Errorf("ForceUInt32(%v) = %v; want %v", test.input, result, test.expected)
+		}
+	}
+}
+
+func TestForceInt16(t *testing.T) {
+	tests := []struct {
+		input    interface{}
+		expected int16
+	}{
+		{int16(12345), 12345},
+		{int16(-543), -543},
+		{nil, 0}, // nil should return zero value for int16
+	}
+
+	for _, test := range tests {
+		result := ForceInt16(test.input)
+		if result != test.expected {
+			t.Errorf("ForceInt16(%v) = %v; want %v", test.input, result, test.expected)
+		}
+	}
+}
+
+func TestForceUInt16(t *testing.T) {
+	tests := []struct {
+		input    interface{}
+		expected uint16
+	}{
+		{uint16(65535), 65535},
+		{uint16(1), 1},
+		{nil, 0}, // nil should return zero value for uint16
+	}
+
+	for _, test := range tests {
+		result := ForceUInt16(test.input)
+		if result != test.expected {
+			t.Errorf("ForceUInt16(%v) = %v; want %v", test.input, result, test.expected)
+		}
+	}
+}
+
+func TestForceInt8(t *testing.T) {
+	tests := []struct {
+		input    interface{}
+		expected int8
+	}{
+		{int8(127), 127},
+		{int8(-128), -128},
+		{nil, 0}, // nil should return zero value for int8
+	}
+
+	for _, test := range tests {
+		result := ForceInt8(test.input)
+		if result != test.expected {
+			t.Errorf("ForceInt8(%v) = %v; want %v", test.input, result, test.expected)
+		}
+	}
+}
+
+func TestForceUInt8(t *testing.T) {
+	tests := []struct {
+		input    interface{}
+		expected uint8
+	}{
+		{uint8(255), 255},
+		{uint8(0), 0},
+		{nil, 0}, // nil should return zero value for uint8
+	}
+
+	for _, test := range tests {
+		result := ForceUInt8(test.input)
+		if result != test.expected {
+			t.Errorf("ForceUInt8(%v) = %v; want %v", test.input, result, test.expected)
+		}
+	}
+}
+
+func TestForceFloat32(t *testing.T) {
+	tests := []struct {
+		input    interface{}
+		expected float32
+	}{
+		{float32(3.14), 3.14},
+		{float32(-2.71), -2.71},
+		{nil, 0}, // nil should return zero value for float32
+	}
+
+	for _, test := range tests {
+		result := ForceFloat32(test.input)
+		if result != test.expected {
+			t.Errorf("ForceFloat32(%v) = %v; want %v", test.input, result, test.expected)
+		}
+	}
+}
+
+func TestForceFloat64(t *testing.T) {
+	tests := []struct {
+		input    interface{}
+		expected float64
+	}{
+		{float64(2.718), 2.718},
+		{float64(-3.14), -3.14},
+		{nil, 0}, // nil should return zero value for float64
+	}
+
+	for _, test := range tests {
+		result := ForceFloat64(test.input)
+		if result != test.expected {
+			t.Errorf("ForceFloat64(%v) = %v; want %v", test.input, result, test.expected)
+		}
+	}
+}
+
+func TestForceInt64(t *testing.T) {
+	tests := []struct {
+		input    interface{}
+		expected int64
+	}{
+		{int64(123456789), 123456789},
+		{int64(-987654321), -987654321},
+		{nil, 0}, // nil should return zero value for int64
+	}
+
+	for _, test := range tests {
+		result := ForceInt64(test.input)
+		if result != test.expected {
+			t.Errorf("ForceInt64(%v) = %v; want %v", test.input, result, test.expected)
+		}
+	}
+}
+
+func TestForceUint64(t *testing.T) {
+	tests := []struct {
+		input    interface{}
+		expected uint64
+	}{
+		{uint64(123456789), 123456789},
+		{uint64(0), 0},
+		{nil, 0}, // nil should return zero value for uint64
+	}
+
+	for _, test := range tests {
+		result := ForceUint64(test.input)
+		if result != test.expected {
+			t.Errorf("ForceUint64(%v) = %v; want %v", test.input, result, test.expected)
+		}
+	}
 }
